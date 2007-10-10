@@ -99,12 +99,14 @@ The function also has a fault-tolerance function where any jobs that are abnorma
 
 \seealso{\code{\link[caret]{createGrid}}, \code{\link[caret]{createFolds}}}
 \examples{
+\dontrun{
 data(iris)
 TrainData <- iris[,1:4]
 TrainClasses <- iris[,5]
 
 knnFit <- trainLSF(TrainData, TrainClasses, "knn", tuneLength = 10, 
    trControl = trainLSFControl(method = "boot"))
+}
 }
 
 \keyword{models}

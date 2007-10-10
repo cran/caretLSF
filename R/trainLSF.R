@@ -207,10 +207,10 @@ function(x, y,
          tmpModelFit <- do.call(createModel, argList)      
          tmpPerf <- switch(
             class(tmpModelFit)[1],
-            randomForest = rfStats(tmpModelFit),
-            RandomForest = cforestStats(tmpModelFit),
-            bagEarth =, bagFDA = bagEarthStats(tmpModelFit),
-            regbagg =, classbagg = ipredStats(tmpModelFit))
+            randomForest = caret:::rfStats(tmpModelFit),
+            RandomForest = caret:::cforestStats(tmpModelFit),
+            bagEarth =, bagFDA = caret:::bagEarthStats(tmpModelFit),
+            regbagg =, classbagg = caret:::ipredStats(tmpModelFit))
          performance[i, names(performance) %in% names(tmpPerf)] <- tmpPerf      
             
       }
