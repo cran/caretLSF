@@ -6,6 +6,8 @@ trainLSFControl <- function(
    p = .5,
    index = NULL,
    numWorkers = 5,
+   buffer = 20,
+   pause = 10,
    lsf = lsf.ctrl())
 {
    list(
@@ -16,6 +18,8 @@ trainLSFControl <- function(
       p = p,
       index = index,
       numWorkers = numWorkers,
+      buffer = buffer,
+      pause = pause,
       lsf = lsf
       )
 }

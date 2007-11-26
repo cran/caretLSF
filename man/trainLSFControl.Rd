@@ -11,6 +11,8 @@ trainLSFControl(
    p = 0.5, 
    index = NULL,
    numWorkers = 5,
+   buffer = 20,
+   pause = 10,   
    lsf = lsf.ctrl())
 }
 \arguments{
@@ -26,6 +28,9 @@ trainLSFControl(
     iteration.}
   \item{numWorkers}{the number of nodes that the job should be split
     across}
+  \item{buffer}{a multiplier for the job kill threshold: how many times slower than the slowest job does a task have to be before it is stopped}    
+  \item{pause}{number of seconds between checking the current jobs}    
+
   \item{lsf}{a list of optional control parameters for submitting
     jobs. See \code{\link[Rlsf]{lsf.ctrl}} for more details}
   

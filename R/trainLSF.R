@@ -1,6 +1,5 @@
 
-"trainLSF" <-
-function(x, y, 
+trainLSF <- function(x, y, 
    method = "rf", 
    ..., 
    metric = ifelse(is.factor(y), "Accuracy", "RMSE"),
@@ -8,38 +7,15 @@ function(x, y,
    tuneGrid = NULL, 
    tuneLength = 3)
 {
-
-   funcCall <- match.call(expand.dots = TRUE)
-
    library(Rlsf)
-   
-   workerWrapper <- function(index, args)
-   {
-         tmp <- function(dataIndex, argValues)
-         {
-            try(resampleWrapper(argValues, dataIndex), silent = TRUE)
-         }
-         out <- data.frame(lapply(index, tmp, argValues = args))
-      out
-   }
-   
-   badResults <- function(x)
-   {
-    
-      if(is.null(x)) return(TRUE)
-      if(length(x) == 0) return(TRUE)
-      if(is.vector(x))
-      {
-         if(any( x == "killed due to excessive run time")) return(TRUE)
-      }
-      FALSE
-   }      
+   funcCall <- match.call(expand.dots = TRUE)
    
    modelType <- if(is.factor(y)) "Classification"  else "Regression"
+   modelInfo <- caret:::modelLookup(method)
            
    if(modelType == "Classification")
    {     
-      if(method %in% c("mars", "lasso", "lm", "earth")) stop("wrong model type for classification")
+      if(!any(modelInfo$forClass)) stop("wrong model type for classification")
       # we should get and save the class labels to ensure that predictions are coerced      
       # to factors that have the same levels as the original data. This is especially 
       # important with multiclass systems where one or more classes have low sample sizes
@@ -50,15 +26,14 @@ function(x, y,
       if(!(metric %in% c("Accuracy", "Kappa"))) 
          stop(paste("Metric", metric, "not applicable for classification models"))
    } else {
-      if(method %in% c("rda", "mda", "lvq", "gpls", "nb", "pam", "knn", "lda", "fda", "ada")) 
-         stop("wrong model type for regression")
+      if(!any(modelInfo$forReg)) stop("wrong model type for regression")
       if(!(metric %in% c("RMSE", "Rsquared"))) 
          stop(paste("Metric", metric, "not applicable for regression models"))         
       classLevels <- NA
    }
    
    if(trControl$method == "oob" & !(method %in% c("rf", "treebag", "cforest", "bagEarth", "bagFDA")))
-   	stop("for oob error rates, model bust be one of: rf, cforest, bagEarth, bagFDA or treebag")
+      stop("for oob error rates, model bust be one of: rf, cforest, bagEarth, bagFDA or treebag")
    
    if(is.null(trControl$index)) trControl$index <- switch(
       tolower(trControl$method),
@@ -87,172 +62,207 @@ function(x, y,
    # if no default training grid is specified, get one. We have to pass in the formula
    # and data for some models (rpart, pam, etc - see manual fo rmore details)
    if(is.null(tuneGrid)) tuneGrid <- createGrid(method, tuneLength, trainData)
-   
-   # performance will be a container for the resampled performance
-   if(modelType == "Regression")
+
+#lsf
+
+   library(Rlsf)
+   badResults <- function(x)
    {
-      performance <- data.frame(matrix(NA, ncol = 4, nrow = dim(tuneGrid)[1]))   
-      names(performance) <- c("RMSE", "Rsquared", "RMSESD", "RsquaredSD")   
-
-   } else {
-      performance <- data.frame(matrix(NA, ncol = 4, nrow = dim(tuneGrid)[1]))   
-      names(performance) <- c("Accuracy", "Kappa", "AccuracySD", "KappaSD")
-
-   }
- 
-   # setup the parallel proc stuff
-   
+    
+      if(is.null(x)) return(TRUE)
+      if(length(x) == 0) return(TRUE)
+      if(is.vector(x))
+      {
+         if(any( x == "killed due to excessive run time")) return(TRUE)
+      }
+      FALSE
+   }  
    lsfControl <- trControl$lsf
    lsfControl$env <- environment(badResults)
-   lsfControl$savelist <- c("argList", "trainDataInd", "workerWrapper")
+   lsfControl$savelist <- c("argList", "trainDataInd")
    lsfControl$packages <- c("caret", "caretLSF")
    if(is.null(lsfControl$tmpPath)) lsfControl$tmpPath <- lsfTmpDir()
 
    if(trControl$numWorkers > length(trControl$index)) trControl$numWorkers <- length(trControl$index)
-   
-   workerGroups <- sort(
-      createFolds(
-         seq(along = (trControl$index)), 
-         k = trControl$numWorkers, 
-         list = FALSE))
-   uniqueGroups <- sort(unique(workerGroups))   
-
- 
- 	# not needed for oob
- 	
-   if(trControl$method != "oob") resamplePredictions <- vector(mode = "list", length = dim(tuneGrid)[1])
- 
-   # loop over the training grid combinations, train the models and return the
-   # results 
-   for(i in seq(along = tuneGrid[,1]))
+   makeIndex <- function(n, k)
    {
+      out <- rep(1:k, n%/%k)
+      if(n %% k > 0)  out <- c(out, sample(1:k, n %% k))
+      out
+   }
+
+   workerGroups <- makeIndex(length(trControl$index), trControl$numWorkers)
+   uniqueGroups <- sort(unique(workerGroups)) 
+   if(trControl$verboseIter)
+   {   
+      cat("Distribution of resamples per job:\n")
+      print(table(paste("job", workerGroups)))
+      cat("\n")
+   }
+#lsf
+
+
+#------------------------------------------------------------------------------------------------------------------------------------------------------#
+   # For each tuning parameter combination, we will loop over them, fit models and generate predictions.
+   # We only save the predictions at this point, not the models (and in the case of method = "oob" we 
+   # only save the prediction summaries at this stage.
+   
+   
+   # trainInfo will hold teh infomration about how we should loop to train the model and what types
+   # of parameters are used. If method = "oob", we need to setip a container for the resamplng 
+   # summary statistics 
+   
+   trainInfo <- caret:::tuneScheme(method, tuneGrid, trControl$method == "oob")
+   paramCols <- paste(".", trainInfo$model$parameter, sep = "")
+      
+   if(trainInfo$scheme == "oob")
+   {
+      if(modelType == "Regression")
+      {
+         performance <- data.frame(matrix(NA, ncol = 4, nrow = dim(trainInfo$loop)[1]))   
+         names(performance) <- c("RMSE", "Rsquared", "RMSESD", "RsquaredSD")   
+   
+      } else {
+         performance <- data.frame(matrix(NA, ncol = 4, nrow = dim(trainInfo$loop)[1]))   
+         names(performance) <- c("Accuracy", "Kappa", "AccuracySD", "KappaSD")
+      }
+   }   
+
+   results <- NULL
+   for(j in 1:nrow(trainInfo$loop))
+   {
+
       if(trControl$verboseIter)
       {
-         if(!all(is.null(tuneGrid[i,]))) cat("Iter", i, " Values:", paste(format(tuneGrid[i,,drop = FALSE]), collapse = ", "), "\n")
+         caret:::iterPrint(trainInfo, j)            
          flush.console() 
       }
-
+            
       argList <- list(
          data = trainData,
          method = method,
-         tuneValue = tuneGrid[i,, drop = FALSE],
+         tuneValue = trainInfo$loop[j,, drop = FALSE],
          obsLevels = classLevels)
-      argList <- append(argList, list(...))
-
-		# for non-oob error rates, we will fit the model and return the held-out predictions
-		if(trControl$method != "oob")
-		{
-	      resampleMatrix <- matrix(
-	         NA,
-	         ncol = length(trControl$index),
-	         nrow=dim(trainData)[1])
-	
-	      # start LSF changes
-         lsfJobs <- vector(mode = "list", length = length(uniqueGroups))
-         cat("\n   Starting LSF jobs\n")      
-         for(m in seq(along = uniqueGroups))
-         {
-            trainDataInd <- trControl$index[which(m == workerGroups)]
-            cat("   ")
-            lsfJobs[[m]] <- lsf.submit2(
-               func = workerWrapper,
-               index = trainDataInd,            
-               args = argList, 
-               ctrl = lsfControl
-               )
-         }      
-         cat("\n")
-   
-         resampleList <- jobMonitor(lsfJobs, buffer = 10, pause = 4)
-         cat("\n")
-       
-         isBadResults <- unlist(lapply(resampleList, badResults))
-         if(any(isBadResults))
-         {
-            if(all(isBadResults) | sum(!isBadResults) == 1) stop("<2 resample iterations returned results")
-            cat("*** ", sum(isBadResults), "resample iterations did not return results\n")
-            resampleList <- resampleList[!isBadResults]
-         }
+      argList <- append(argList, list(...))         
       
-         resampleMatrix <- as.data.frame(resampleList) 
-         #end LSF changes
+      # use switch statement here instead
+      switch(
+         trainInfo$scheme,
+         basic = 
+         {
+	          # start LSF changes
+            lsfJobs <- vector(mode = "list", length = length(uniqueGroups))
+            cat("\n   Starting LSF jobs\n")      
+            for(m in seq(along = uniqueGroups))
+            {
+               trainDataInd <- trControl$index[which(m == workerGroups)]
+               cat("   ")
+               lsfJobs[[m]] <- lsf.submit2(
+                  func = caret:::byResampleBasic,
+                  ind = trainDataInd,            
+                  x = argList, 
+                  combo = trainInfo$loop[j, trainInfo$constant,drop = FALSE],
+                  ctrl = lsfControl
+                  )
+            }      
+            cat("\n")
+            resampleList <- jobMonitor(lsfJobs, buffer = trControl$buffer, pause = trControl$pause)   
+            thisIter <- do.call(rbind, resampleList)             
+            results <- rbind(results, thisIter)
+         },
+         seq = 
+         {
+	          # start LSF changes
+            lsfJobs <- vector(mode = "list", length = length(uniqueGroups))
+            cat("\n   Starting LSF jobs\n")      
+            for(m in seq(along = uniqueGroups))
+            {
+               trainDataInd <- trControl$index[which(m == workerGroups)]
+               cat("   ")
+               lsfJobs[[m]] <- lsf.submit2(
+                  func = caret:::byResampleSeq,
+                  ind = trainDataInd,            
+                  x = argList, 
+                  seq = trainInfo$seqParam[[j]],
+                  combo = trainInfo$loop[j, trainInfo$constant,drop = FALSE],
+                  ctrl = lsfControl
+                  )
+            }      
+            cat("\n")
+            resampleList <- jobMonitor(lsfJobs, buffer = trControl$buffer, pause = trControl$pause)  
+            thisIter <- do.call(rbind, resampleList)             
+            results <- rbind(results, thisIter)            
+         },
+         oob =
+         {
+            tmpModelFit <- do.call(createModel, argList)      
+            tmpPerf <- switch(
+               class(tmpModelFit)[1],
+               randomForest = rfStats(tmpModelFit),
+               RandomForest = cforestStats(tmpModelFit),
+               bagEarth =, bagFDA = bagEarthStats(tmpModelFit),
+               regbagg =, classbagg = ipredStats(tmpModelFit))
+            performance[j, names(performance) %in% names(tmpPerf)] <- tmpPerf           
+         
+         
+         })     
+   }   
 
-         if(method == "pam") cat("\n")
-
-              
-	      if(length(trControl$index) == length(y)) 
-	         resampleMatrix <- apply(resampleMatrix, 1, function(data) data[!is.na(data)])
-	
-	      if(modelType == "Classification")
-	      {
-	         resampleMatrix <- as.data.frame(resampleMatrix)
-	         resampleMatrix <- as.data.frame(lapply(
-	            resampleMatrix, 
-	            function(data, y) factor(data, levels = levels(y)), 
-	            y = y)) 
-	      }
-	                   
-	      # we will post-process the results to get performance
-	      # metrics per bootstrap sample or cv group, then save
-	      # the averages and SDs of the metrics
-	      resampleResults <- resampleSummary(
-	         trainData$.outcome,
-	         resampleMatrix,
-	         trControl$index)
-	         
-	      performance[i,] <- resampleResults$metrics
-	      resamplePredictions[[i]] <- resampleResults$data
-      } else {
-      	# here it the model and return the oob preformance measures
-         tmpModelFit <- do.call(createModel, argList)      
-         tmpPerf <- switch(
-            class(tmpModelFit)[1],
-            randomForest = caret:::rfStats(tmpModelFit),
-            RandomForest = caret:::cforestStats(tmpModelFit),
-            bagEarth =, bagFDA = caret:::bagEarthStats(tmpModelFit),
-            regbagg =, classbagg = caret:::ipredStats(tmpModelFit))
-         performance[i, names(performance) %in% names(tmpPerf)] <- tmpPerf      
-            
-      }
-   }  
-
-   # figure out the best combination (based on performance)
-   # re-ft the model under this conditions (and anything specified
-   # in the ... arguments)
-
+   paramNames <- substring(names(tuneGrid), 2)
+   if(trControl$method != "oob")
+   {     
+      perResample <- caret:::poolByResample(results, tuneGrid, foo)
+      performance <- caret:::summarize(perResample, tuneGrid, foo)
+      pNames <- names(performance)
+      pNames[pNames %in% names(tuneGrid)] <- paramNames
+      names(performance) <- pNames
+ 
+   } else {
+      tmpLoop <- trainInfo$loop
+      names(tmpLoop) <- substring(names(tmpLoop), 2)
+      performance <- cbind(tmpLoop, performance)  
+   }
+          
+   perfCols <- names(performance)
+   perfCols <- perfCols[!(perfCols %in% paramNames)]
+               
    bestIter <- if(metric != "RMSE") which.max(performance[,metric])
-      else which.min(performance[,metric])
+      else which.min(performance[,metric])     
+         
+   bestTune <- performance[bestIter, trainInfo$model$parameter, drop = FALSE]
+    names(bestTune) <- paste(".", names(bestTune), sep = "") 
+    
+   if(trControl$method != "oob")
+   {           
+      byResample <- merge(bestTune, perResample)        
+      byResample <- byResample[,!(names(perResample) %in% names(tuneGrid))]                     
+   } else {
+      byResample <- NULL        
+   } 
+
+   # reorder rows of performance
+   orderList <- list()
+   for(i in seq(along = trainInfo$model$parameter))
+   {
+      orderList[[i]] <- performance[,trainInfo$model$parameter[i]]
+   }
+   names(orderList) <- trainInfo$model$parameter
+   performance <- performance[do.call("order", orderList),]       
+  
+       
+#------------------------------------------------------------------------------------------------------------------------------------------------------#
 
    finalModel <- createModel(
       trainData, 
       method = method, 
-      tuneGrid[bestIter,, drop = FALSE], 
+      bestTune, 
       obsLevels = classLevels, 
       ...)
     
    # remove this and check for other places it is reference
    # replaced by tuneValue
-   if(method == "pls") finalModel$bestIter <- tuneGrid[bestIter,, drop = FALSE]
-
-   # save the resampling statistics where appropriate
-   if(trControl$method != "oob")
-   {
-      #check for loo 
-      if(any(nrow(trainData) - unlist(lapply(trControl$index, length)) == 1))
-      {
-         byResample <- NULL      
-      } else {
-         bestResamples <- resamplePredictions[[bestIter]]
-         summaryStats <- by(bestResamples, bestResamples$group, function(x) postResample(x$pred, x$obs))
-         byResample <- matrix(unlist(unclass(summaryStats)), ncol = length(summaryStats[[1]]), byrow = TRUE)
-         byResample <- as.data.frame(byResample)
-         colnames(byResample) <- names(summaryStats[[1]]) 
-      }
-   } else byResample <- NULL   
-
-   # remove the dot in the first position of the name
-   names(tuneGrid) <-  substring(names(tuneGrid), 2)
-   resultDataFrame <- cbind(tuneGrid, performance)
+   if(method == "pls") finalModel$bestIter <- bestTune
+  
    outData <- if(trControl$returnData) trainData else NULL
    
    # in the case of pam, the data will need to be saved differently
@@ -265,14 +275,16 @@ function(x, y,
    structure(list(
       method = method,
       modelType = modelType,
-      results = resultDataFrame, 
+      results = performance, 
       call = funcCall, 
       dots = list(...),
       metric = metric,
       control = trControl,
       finalModel = finalModel,
       trainingData = outData,
-      resample = byResample), 
+      resample = byResample
+      ), 
       class = "train")
 }
+
 
