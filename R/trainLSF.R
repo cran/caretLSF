@@ -128,6 +128,13 @@ trainLSF <- function(x, y,
       }
    }   
 
+
+   # create the container here based on nrow(trainInfo$loop) and length(uniqueGroups)
+   # this will store all of the results across all tuning parameters and remote jobs
+   allJobResults <- vector(mode = "list", length = length(uniqueGroups) * nrow(trainInfo$loop))
+
+   iteration <- 1 # to track the number of bsubs and index allJobResults
+   
    results <- NULL
    for(j in 1:nrow(trainInfo$loop))
    {
@@ -139,10 +146,10 @@ trainLSF <- function(x, y,
       }
             
       argList <- list(
-         data = trainData,
-         method = method,
-         tuneValue = trainInfo$loop[j,, drop = FALSE],
-         obsLevels = classLevels)
+                      data = trainData,
+                      method = method,
+                      tuneValue = trainInfo$loop[j,, drop = FALSE],
+                      obsLevels = classLevels)
       argList <- append(argList, list(...))         
       
       # use switch statement here instead
@@ -150,36 +157,31 @@ trainLSF <- function(x, y,
          trainInfo$scheme,
          basic = 
          {
-	          # start LSF changes
-            lsfJobs <- vector(mode = "list", length = length(uniqueGroups))
             cat("\n   Starting LSF jobs\n")      
             for(m in seq(along = uniqueGroups))
             {
                trainDataInd <- trControl$index[which(m == workerGroups)]
                cat("   ")
-               lsfJobs[[m]] <- lsf.submit2(
+               allJobResults[[iteration]] <- lsf.submit2(
                   func = caret:::byResampleBasic,
                   ind = trainDataInd,            
                   x = argList, 
                   combo = trainInfo$loop[j, trainInfo$constant,drop = FALSE],
                   ctrl = lsfControl
                   )
+               iteration <- iteration + 1
             }      
             cat("\n")
-            resampleList <- jobMonitor(lsfJobs, buffer = trControl$buffer, pause = trControl$pause)   
-            thisIter <- do.call(rbind, resampleList)             
-            results <- rbind(results, thisIter)
          },
          seq = 
          {
 	          # start LSF changes
-            lsfJobs <- vector(mode = "list", length = length(uniqueGroups))
             cat("\n   Starting LSF jobs\n")      
             for(m in seq(along = uniqueGroups))
             {
                trainDataInd <- trControl$index[which(m == workerGroups)]
                cat("   ")
-               lsfJobs[[m]] <- lsf.submit2(
+               allJobResults[[iteration]] <- lsf.submit2(
                   func = caret:::byResampleSeq,
                   ind = trainDataInd,            
                   x = argList, 
@@ -187,27 +189,31 @@ trainLSF <- function(x, y,
                   combo = trainInfo$loop[j, trainInfo$constant,drop = FALSE],
                   ctrl = lsfControl
                   )
+              iteration <- iteration + 1
             }      
-            cat("\n")
-            resampleList <- jobMonitor(lsfJobs, buffer = trControl$buffer, pause = trControl$pause)  
-            thisIter <- do.call(rbind, resampleList)             
-            results <- rbind(results, thisIter)            
+            
          },
+
+##### do abetter job here and go parallel
+             
          oob =
          {
             tmpModelFit <- do.call(createModel, argList)      
             tmpPerf <- switch(
                class(tmpModelFit)[1],
-               randomForest = rfStats(tmpModelFit),
-               RandomForest = cforestStats(tmpModelFit),
-               bagEarth =, bagFDA = bagEarthStats(tmpModelFit),
-               regbagg =, classbagg = ipredStats(tmpModelFit))
+               randomForest = caret:::rfStats(tmpModelFit),
+               RandomForest = caret:::cforestStats(tmpModelFit),
+               bagEarth =, bagFDA = caret:::bagEarthStats(tmpModelFit),
+               regbagg =, classbagg = caret:::ipredStats(tmpModelFit))
             performance[j, names(performance) %in% names(tmpPerf)] <- tmpPerf           
          
          
          })     
    }   
-
+   cat("\n")
+   resampleList <- jobMonitor(allJobResults, buffer = trControl$buffer, pause = trControl$pause)  
+   results <- do.call(rbind, resampleList)             
+   
    paramNames <- substring(names(tuneGrid), 2)
    if(trControl$method != "oob")
    {     
