@@ -7,10 +7,13 @@
   fits each model and calculates a resampling based performance measure. 
 }
 \usage{
-trainLSF(x, y, method = "rf",  ..., 
-   metric = ifelse(is.factor(y), "Accuracy", "RMSE"),   
-   trControl = trainLSFControl(), tuneGrid = NULL, 
-   tuneLength = 3)
+trainLSF(
+         x, y,
+         method = "rf",  ..., 
+         metric = ifelse(is.factor(y), "Accuracy", "RMSE"),   
+         trControl = trainLSFControl(),
+         tuneGrid = NULL, 
+         tuneLength = 3)
 }
 \arguments{
   \item{x}{a data frame containing training data where samples are in rows and features are in columns.}
@@ -106,8 +109,11 @@ data(iris)
 TrainData <- iris[,1:4]
 TrainClasses <- iris[,5]
 
-knnFit <- trainLSF(TrainData, TrainClasses, "knn", tuneLength = 10, 
-   trControl = trainLSFControl(method = "boot"))
+knnFit <- trainLSF(
+                   TrainData, TrainClasses,
+                   "knn",
+                   tuneLength = 10, 
+                   trControl = trainLSFControl(method = "boot"))
 }
 }
 

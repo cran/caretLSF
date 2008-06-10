@@ -232,11 +232,33 @@ trainLSF <- function(x, y,
    perfCols <- names(performance)
    perfCols <- perfCols[!(perfCols %in% paramNames)]
                
-   bestIter <- if(metric != "RMSE") which.max(performance[,metric])
-      else which.min(performance[,metric])     
+  # sort the tuning parameters form least complex to most complex
+  performance <- caret:::byComplexity(performance, method)
+
+  # select the optimal set
+
+  selectClass <- class(trControl$selectionFunction)[1]
+
+  if(selectClass == "function")
+    {
+      bestIter <- trControl$selectionFunction(performance, metric)
+    }
+  else {
+    if(trControl$selectionFunction == "oneSE")
+      {
+        bestIter <- caret:::oneSE(performance, metric, length(trControl$index))
+      } else {
+
+        bestIter <- do.call(
+                            trControl$selectionFunction,
+                            list(
+                                 x = performance,
+                                 metric = metric))
+      }
+  }     
          
    bestTune <- performance[bestIter, trainInfo$model$parameter, drop = FALSE]
-    names(bestTune) <- paste(".", names(bestTune), sep = "") 
+   names(bestTune) <- paste(".", names(bestTune), sep = "") 
     
    if(trControl$method != "oob")
    {           
@@ -259,11 +281,11 @@ trainLSF <- function(x, y,
 #------------------------------------------------------------------------------------------------------------------------------------------------------#
 
    finalModel <- createModel(
-      trainData, 
-      method = method, 
-      bestTune, 
-      obsLevels = classLevels, 
-      ...)
+                             trainData, 
+                             method = method, 
+                             bestTune, 
+                             obsLevels = classLevels, 
+                             ...)
     
    # remove this and check for other places it is reference
    # replaced by tuneValue
@@ -279,18 +301,19 @@ trainLSF <- function(x, y,
    }     
    
    structure(list(
-      method = method,
-      modelType = modelType,
-      results = performance, 
-      call = funcCall, 
-      dots = list(...),
-      metric = metric,
-      control = trControl,
-      finalModel = finalModel,
-      trainingData = outData,
-      resample = byResample
-      ), 
-      class = "train")
+                  method = method,
+                  modelType = modelType,
+                  results = performance,
+                  bestTune = bestTune,
+                  call = funcCall, 
+                  dots = list(...),
+                  metric = metric,
+                  control = trControl,
+                  finalModel = finalModel,
+                  trainingData = outData,
+                  resample = byResample
+                  ), 
+             class = "train")
 }
 
 
